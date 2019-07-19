@@ -9,13 +9,32 @@ https://docs.djangoproject.com/en/2.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/2.2/ref/settings/
 """
+from os import path
 
 import environ
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
+
 ROOT_DIR = environ.Path(__file__) - 3
 
 env = environ.Env()
+
+READ_DOT_ENV_FILE = env.bool('DJANGO_READ_DOT_ENV_FILE', default=False)
+
+if READ_DOT_ENV_FILE:
+    env_name = env.str('DJANGO_SETTINGS_MODULE', 'development').split('.').pop()
+    env_file_name = f".env.{env_name}"
+
+    try:
+        env_file = str(ROOT_DIR.path(env_file_name))
+        if not path.exists(env_file):
+            raise FileNotFoundError
+    except FileNotFoundError as e:
+        env_file = str(ROOT_DIR.path('.env'))
+
+    env.read_env(env_file)
+
+    print('The .env file has been loaded. See base.py for more information')
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/2.2/howto/deployment/checklist/
@@ -122,4 +141,15 @@ STATIC_URL = '/static/'
 
 AUTH_USER_MODEL = 'users.User'
 
-REST_FRAMEWORK = {}
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'django_cognito_jwt.JSONWebTokenAuthentication',
+    ],
+    'TEST_REQUEST_DEFAULT_FORMAT': 'json'
+}
+
+COGNITO_AWS_REGION = env.str('COGNITO_AWS_REGION', default='')
+
+COGNITO_USER_POOL = env.str('COGNITO_USER_POOL', default='')
+
+COGNITO_AUDIENCE = env.str('COGNITO_AUDIENCE', default='')

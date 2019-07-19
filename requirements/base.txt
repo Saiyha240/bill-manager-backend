@@ -1,5 +1,8 @@
 django
-django-extensions
-djangorestframework
+django-cognito-jwt
 django-cors-headers
 django-environ
+django-extensions
+django-enumfield
+djangorestframework
+drf-nested-routers

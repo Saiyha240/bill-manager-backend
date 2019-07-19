@@ -1,5 +1,7 @@
 .DEFAULT_GOAL := default
 
+create-superuser:
+	python manage.py createsuperuser --email admin@example.com --username admin --first_name '' --last_name ''
 migrate:
 	python manage.py makemigrations; \
     python manage.py migrate
