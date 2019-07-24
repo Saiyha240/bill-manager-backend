@@ -58,9 +58,10 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
 
     'rest_framework',
-    'api.users',
+    'api.authentication',
+    'api.profiles',
     'api.events',
-    'api.orders',
+    # 'api.orders',
 ]
 
 MIDDLEWARE = [
@@ -139,7 +140,7 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 
-AUTH_USER_MODEL = 'users.User'
+AUTH_USER_MODEL = 'authentication.User'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [

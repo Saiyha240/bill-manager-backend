@@ -1,40 +1,62 @@
 # Create your views here.
-from django.db import IntegrityError
-from rest_framework import viewsets
-from rest_framework.decorators import action
+from rest_framework import generics, status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.status import HTTP_400_BAD_REQUEST
 
-from api.events.models import Event, Guest
-from api.events.serializers import EventSerializer
+from api.events.models import Event, MemberType
+from api.events.permissions import EventPermissions
+from api.events.serializers import EventSerializer, EventUpdateSerializer, MemberSerializer, EventJoinSerializer
 
 
-class EventViewSet(viewsets.ModelViewSet):
+class EventJoinView(generics.GenericAPIView):
+    serializer_class = EventJoinSerializer
+
+    def post(self, request, pk, *args, **kwargs):
+        serializer_data = {
+            "event": pk,
+            "user": request.user.pk,
+            "type": request.data.get('type', MemberType.GUEST)
+        }
+
+        serializer = self.get_serializer(data=serializer_data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class EventListCreateView(generics.ListCreateAPIView):
+    permission_classes = (IsAuthenticated,)
+    serializer_class = EventSerializer
     queryset = Event.objects.all()
+
+
+class UserEventListCreateView(generics.ListAPIView):
+    permission_classes = (IsAuthenticated, EventPermissions)
     serializer_class = EventSerializer
-
-    @action(methods=['get'], detail=True, url_path='join', url_name='join')
-    def join(self, request, pk=None):
-        event = Event.objects.get(pk=pk)
-        current_user = request.user
-
-        try:
-            Guest.objects.create(user=current_user, event=event)
-
-            serializer = self.get_serializer(event)
-
-            return Response(serializer.data)
-        except IntegrityError:
-            return Response({"message": "Already joined"}, status=HTTP_400_BAD_REQUEST)
-
-
-class UserEventViewSet(viewsets.ModelViewSet):
-    serializer_class = EventSerializer
-
-    # permission_classes = [permissions.IsAuthenticated]
-
-    class Meta:
-        ordering = ('start_time',)
 
     def get_queryset(self):
-        return Event.objects.filter(users=self.kwargs['user_pk'])
+        return Event.objects.filter(attendees=self.kwargs['user_pk'])
+
+
+class EventRetrieveUpdateView(generics.RetrieveUpdateAPIView):
+    permission_classes = (IsAuthenticated, EventPermissions)
+    serializer_class = EventUpdateSerializer
+    queryset = Event.objects.all()
+
+    def update(self, request, *args, **kwargs):
+        request_data = request.data
+        event = self.get_object()
+
+        serializer_data = {
+            'name': request_data.get('name', event.name),
+            'time_start': request_data.get('time_start', event.time_start),
+            'time_end': request_data.get('time_end', event.time_end),
+            'members': request_data.get('members', MemberSerializer(event.members, many=True).data)
+        }
+
+        serializer = self.serializer_class(event, data=serializer_data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(serializer.data, status=status.HTTP_200_OK)

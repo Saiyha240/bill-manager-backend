@@ -1,17 +1,15 @@
 from datetime import timedelta
 
-from django.contrib.auth import get_user_model
 from django.db import IntegrityError
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
+from rest_framework import status
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from api.events.models import Event, Guest, GuestType
+from api.events.models import Event, Member, MemberType, User
 from api.events.serializers import EventSerializer
-from api.events.views import EventViewSet
-
-User = get_user_model()
+from api.events.views import EventListCreateView, UserEventListCreateView, EventJoinView, EventRetrieveUpdateView
 
 
 class EventUsersM2MTest(TestCase):
@@ -46,65 +44,65 @@ class EventUsersM2MTest(TestCase):
         self.event_2.refresh_from_db()
         self.event_3.refresh_from_db()
 
-        Guest.objects.create(user=self.user_1, event=self.event_1, type=GuestType.ADMINISTRATOR)
-        Guest.objects.create(user=self.user_2, event=self.event_1, type=GuestType.GUEST)
-        Guest.objects.create(user=self.user_3, event=self.event_1, type=GuestType.GUEST)
+        Member.objects.create(user=self.user_1, event=self.event_1, type=MemberType.ADMINISTRATOR)
+        Member.objects.create(user=self.user_2, event=self.event_1, type=MemberType.GUEST)
+        Member.objects.create(user=self.user_3, event=self.event_1, type=MemberType.GUEST)
 
-        Guest.objects.create(user=self.user_1, event=self.event_2, type=GuestType.ADMINISTRATOR)
-        Guest.objects.create(user=self.user_2, event=self.event_2, type=GuestType.ORGANIZER)
-        Guest.objects.create(user=self.user_3, event=self.event_2, type=GuestType.GUEST)
+        Member.objects.create(user=self.user_1, event=self.event_2, type=MemberType.ADMINISTRATOR)
+        Member.objects.create(user=self.user_2, event=self.event_2, type=MemberType.ORGANIZER)
+        Member.objects.create(user=self.user_3, event=self.event_2, type=MemberType.GUEST)
 
-        Guest.objects.create(user=self.user_2, event=self.event_3, type=GuestType.ADMINISTRATOR)
+        Member.objects.create(user=self.user_2, event=self.event_3, type=MemberType.ADMINISTRATOR)
 
     def test_get_user_1_hosted_events(self):
-        user_1_hosted_events = list(self.user_1.events.filter(guests__type=GuestType.ADMINISTRATOR))
+        user_1_hosted_events = list(self.user_1.events.filter(members__type=MemberType.ADMINISTRATOR))
 
-        self.assertCountEqual(user_1_hosted_events, [self.event_1, self.event_2])
+        self.assertCountEqual([self.event_1, self.event_2], user_1_hosted_events)
 
     def test_get_user_2_non_hosted_events(self):
-        user_2_non_hosted_events = list(self.user_2.events.filter(guests__type__in=[
-            GuestType.ORGANIZER,
-            GuestType.GUEST
+        user_2_non_hosted_events = list(self.user_2.events.filter(members__type__in=[
+            MemberType.ORGANIZER,
+            MemberType.GUEST
         ]))
 
-        self.assertCountEqual(user_2_non_hosted_events, [self.event_1, self.event_2])
+        self.assertCountEqual([self.event_1, self.event_2], user_2_non_hosted_events)
 
     def test_add_existing_user_in_event_fails(self):
         parameters = dict(user=self.user_1, event=self.event_1)
 
-        self.assertRaises(IntegrityError, Guest.objects.create, **parameters)
+        self.assertRaises(IntegrityError, Member.objects.create, **parameters)
 
     def test_remove_user_2_in_event_1(self):
-        user_2_events = Event.objects.filter(users=self.user_2)
+        user_2_events = self.user_2.events.all()
         self.assertCountEqual(list(user_2_events), [self.event_1, self.event_2, self.event_3])
 
-        Event.objects.get(users=self.user_2, pk=self.event_1.id).delete()
+        Event.objects.get(attendees=self.user_2, pk=self.event_1.id).delete()
         user_2_events = user_2_events.all()
 
-        self.assertCountEqual(list(user_2_events), [self.event_2, self.event_3])
+        self.assertCountEqual([self.event_2, self.event_3], list(user_2_events))
 
     def test_update_set_user_2_as_organizer_in_event_1(self):
-        guest_obj = Guest.objects.get(user=self.user_2, event=self.event_1)
+        guest_obj = Member.objects.get(user=self.user_2, event=self.event_1)
 
-        self.assertEquals(guest_obj.type, GuestType.GUEST)
+        self.assertEquals(guest_obj.type, MemberType.GUEST)
 
-        guest_obj.type = GuestType.ORGANIZER
+        guest_obj.type = MemberType.ORGANIZER
         guest_obj.save()
 
-        self.assertEquals(guest_obj.type, GuestType.ORGANIZER)
+        self.assertEquals(MemberType.ORGANIZER, guest_obj.type)
 
     def test_add_user_3_to_event_3_defaults_as_guest_type(self):
-        self.event_3.guests.create(user=self.user_3)
+        self.event_3.members.create(user=self.user_3)
 
-        self.assertIn(self.user_3, list(self.event_3.users.filter(guest_events__type=GuestType.GUEST)))
+        self.assertIn(self.user_3, list(self.event_3.attendees.filter(member__type=MemberType.GUEST)))
 
     def test_add_user_1_to_event_3_as_organizer_type(self):
-        self.event_3.guests.create(user=self.user_1, type=GuestType.ORGANIZER)
+        self.event_3.members.create(user=self.user_1, type=MemberType.ORGANIZER)
 
-        self.assertIn(self.user_1, list(self.event_3.users.filter(guest_events__type=GuestType.ORGANIZER)))
+        self.assertIn(self.user_1, list(self.event_3.attendees.filter(member__type=MemberType.ORGANIZER)))
 
 
-class EventIntegrationTest(TestCase):
+class EventViewsTest(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.user_1 = User.objects.create(username='user1', email='user1@email.com')
@@ -128,6 +126,8 @@ class EventIntegrationTest(TestCase):
         )
 
     def setUp(self) -> None:
+        self.client = APIRequestFactory()
+
         self.user_1.refresh_from_db()
         self.user_2.refresh_from_db()
         self.user_3.refresh_from_db()
@@ -136,15 +136,14 @@ class EventIntegrationTest(TestCase):
         self.event_2.refresh_from_db()
         self.event_3.refresh_from_db()
 
-        self.event_1.guests.create(user=self.user_1, type=GuestType.ADMINISTRATOR)
-        self.event_2.guests.create(user=self.user_2, type=GuestType.ADMINISTRATOR)
-        self.event_3.guests.create(user=self.user_3, type=GuestType.ADMINISTRATOR)
+        self.event_1.members.create(user=self.user_1, type=MemberType.ADMINISTRATOR)
+        self.event_2.members.create(user=self.user_2, type=MemberType.ADMINISTRATOR)
+        self.event_3.members.create(user=self.user_3, type=MemberType.ADMINISTRATOR)
 
     def test_get_all_events(self):
-        factory = APIRequestFactory()
-        request = factory.get(reverse('event-list'))
+        request = self.client.get(reverse('event-list'))
         force_authenticate(request, self.user_1)
-        view = EventViewSet.as_view({'get': 'list'})
+        view = EventListCreateView.as_view()
 
         response = view(request)
 
@@ -159,10 +158,10 @@ class EventIntegrationTest(TestCase):
             "time_start": "2020-08-11T20:17:46.384Z",
             "time_end": "2021-08-12T20:17:46.384Z"
         }
-        factory = APIRequestFactory()
-        request = factory.post(reverse('event-list'), event_request)
+
+        request = self.client.post(reverse('event-list'), event_request)
         force_authenticate(request, self.user_1)
-        view = EventViewSet.as_view({'post': 'create'})
+        view = EventListCreateView.as_view()
 
         response = view(request)
 
@@ -176,17 +175,16 @@ class EventIntegrationTest(TestCase):
             "name": "Event 3",
             "time_start": "2020-08-11T20:17:46.384Z",
             "time_end": "2021-08-12T20:17:46.384Z",
-            "guests": [
+            "members": [
                 {
-                    "user_id": self.user_2.pk,
-                    "type": 2
+                    "user": self.user_2.pk
                 }
             ]
         }
-        factory = APIRequestFactory()
-        request = factory.post(reverse('event-list'), event_request)
+
+        request = self.client.post(reverse('event-list'), event_request)
         force_authenticate(request, self.user_1)
-        view = EventViewSet.as_view({'post': 'create'})
+        view = EventListCreateView.as_view()
 
         response = view(request)
 
@@ -194,3 +192,110 @@ class EventIntegrationTest(TestCase):
         serializer = EventSerializer(event, context={'request': request})
 
         self.assertDictEqual(response.data, serializer.data)
+
+    def test_get_user_events(self):
+        kwargs = {'user_pk': self.user_1.pk}
+
+        request = self.client.get(reverse('user-event-list', kwargs=kwargs))
+        force_authenticate(request, self.user_1)
+        view = UserEventListCreateView.as_view()
+
+        response = view(request, **kwargs)
+
+        serializer = EventSerializer(self.user_1.events, many=True)
+
+        self.assertEquals(serializer.data, response.data)
+
+    def test_user_joins_event(self):
+        kwargs = {'pk': self.event_2.pk}
+
+        request = self.client.post(reverse('event-join', kwargs=kwargs))
+        force_authenticate(request, self.user_1)
+        view = EventJoinView.as_view()
+
+        self.assertNotIn(self.user_1, list(self.event_2.attendees.all()))
+
+        response = view(request, **kwargs)
+
+        self.assertEquals(status.HTTP_200_OK, response.status_code)
+        self.assertIn(self.user_1, list(self.event_2.attendees.all()))
+
+    def test_user_joins_already_joined_event_error(self):
+        Member.objects.create(event=self.event_2, user=self.user_1)
+
+        kwargs = {'pk': self.event_2.pk}
+
+        request = self.client.post(reverse('event-join', kwargs=kwargs))
+        force_authenticate(request, self.user_1)
+        view = EventJoinView.as_view()
+
+        self.assertIn(self.user_1, list(self.event_2.attendees.all()))
+
+        response = view(request, **kwargs)
+
+        self.assertEquals(status.HTTP_400_BAD_REQUEST, response.status_code)
+
+    def test_update_event(self):
+        self.event_1.members.create(user=self.user_2)
+        self.event_2.members.create(user=self.user_3)
+
+        kwargs = {'pk': self.event_1.pk}
+        data = {
+            'time_start': self.event_1.time_start - timedelta(hours=1)
+        }
+
+        request = self.client.patch(reverse('event-detail', kwargs=kwargs), data=data)
+        force_authenticate(request, self.user_1)
+        view = EventRetrieveUpdateView.as_view()
+
+        response = view(request, **kwargs)
+
+        self.event_1.refresh_from_db()
+        serializer = EventSerializer(self.event_1)
+
+        self.assertEquals(status.HTTP_200_OK, response.status_code)
+        self.assertEquals(serializer.data, response.data)
+
+    def test_update_event_with_members(self):
+        kwargs = {'pk': self.event_1.pk}
+        data = {
+            'members': [
+                {
+                    'user': self.user_2.pk,
+                    'type': MemberType.ORGANIZER
+                }
+            ]
+        }
+
+        request = self.client.patch(reverse('event-detail', kwargs=kwargs), data=data)
+        force_authenticate(request, self.user_1)
+        view = EventRetrieveUpdateView.as_view()
+
+        response = view(request, **kwargs)
+
+        self.assertEquals(status.HTTP_200_OK, response.status_code)
+        self.assertIn(self.user_2, list(self.event_1.attendees.all()))
+
+    def test_add_multiple_users_to_event(self):
+        kwargs = {'pk': self.event_1.pk}
+        data = {
+            'members': [
+                {
+                    'user': self.user_2.pk,
+                    'type': MemberType.ORGANIZER
+                },
+                {
+                    'user': self.user_3.pk
+                }
+            ]
+        }
+
+        request = self.client.patch(reverse('event-detail', kwargs=kwargs), data=data)
+        force_authenticate(request, self.user_1)
+        view = EventRetrieveUpdateView.as_view()
+
+        response = view(request, **kwargs)
+
+        self.assertEquals(status.HTTP_200_OK, response.status_code)
+        self.assertIn(self.user_2, list(self.event_1.attendees.all()))
+        self.assertIn(self.user_3, list(self.event_1.attendees.all()))

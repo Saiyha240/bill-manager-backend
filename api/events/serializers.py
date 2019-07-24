@@ -1,57 +1,56 @@
-from django.contrib.auth import get_user_model
-from django.core.validators import EmailValidator
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from django.utils import timezone
 from django.utils.translation import ugettext_lazy as _
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
-from api.events.models import Event, Guest, GuestType
-from api.users.serializers import UserBasicSerializer
-
-User = get_user_model()
+from api.events.models import Event, Member, MemberType
 
 
-class GuestSerializer(serializers.ModelSerializer):
-    user_id = serializers.PrimaryKeyRelatedField(
-        queryset=User.objects.all(),
-        write_only=True,
-        source='user'
-    )
-    user = UserBasicSerializer(read_only=True)
-
+class EventJoinSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Guest
-        fields = ('user', 'type', 'user_id')
-        extra_kwargs = {
-            'email': {
-                'validators': [EmailValidator()]
-            }
-        }
+        model = Member
+        fields = ('user', 'event', 'type')
+
+    def create(self, validated_data):
+        try:
+            member = Member.objects.create(**validated_data)
+
+            return member
+
+        except IntegrityError as e:
+            return ValidationError(_('already joined'))
 
 
-class EventSerializer(serializers.HyperlinkedModelSerializer):
-    guests = GuestSerializer(
-        many=True,
-        required=False
-    )
+class MemberSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Member
+        fields = ('id', 'user', 'type')
+
+
+class EventSerializer(serializers.ModelSerializer):
+    members = MemberSerializer(many=True, required=False)
+    time_start = serializers.DateTimeField(required=False)
+    time_end = serializers.DateTimeField(required=False)
 
     class Meta:
         model = Event
-        fields = ('id', 'name', 'time_start', 'time_end', 'guests', 'url')
+        fields = ('id', 'name', 'time_start', 'time_end', 'members')
 
     def create(self, validated_data):
-        guests = validated_data.pop('guests', [])
+        members = validated_data.pop('members', [])
 
         try:
             with transaction.atomic():
                 event = super().create(validated_data)
 
                 current_user = self.context['request'].user
-                event.guests.create(user=current_user, type=GuestType.ADMINISTRATOR)
+                event.members.create(user=current_user, type=MemberType.ADMINISTRATOR)
 
-                for user in guests:
-                    event.guests.create(**user)
+                for user in members:
+                    if 'type' in user and user['type'] == MemberType.ADMINISTRATOR:
+                        raise ValidationError(_(f'user cannot be set as {MemberType.ADMINISTRATOR.lower()}'))
+                    event.members.create(**user)
 
                 return event
         except Exception as e:
@@ -68,3 +67,31 @@ class EventSerializer(serializers.HyperlinkedModelSerializer):
             raise ValidationError(_('"time_start" cannot be after "time_end"'))
 
         return super().validate(attrs)
+
+
+class EventUpdateSerializer(EventSerializer):
+    members = MemberSerializer(many=True)
+
+    def update(self, instance, validated_data):
+        to_update_members = validated_data.pop('members', [])
+
+        try:
+            with transaction.atomic():
+                event = super().update(instance, validated_data)
+                event_members = set(member.id for member in event.members.all() if
+                                    member.type is not MemberType.ADMINISTRATOR)
+
+                for to_update_member in to_update_members:
+
+                    member, created = event.members.get_or_create(user=to_update_member['user'])
+                    member.type = to_update_member.get('type', member.type)
+                    member.save()
+
+                    if not created:
+                        event_members.discard(member.id)
+
+                event.members.filter(id__in=event_members).delete()
+
+            return event
+        except Exception as e:
+            raise serializers.ValidationError(e)
